@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.local
+.vercel/
+client/dist/
+.claude/
+geodym.html
+quadgeo.html

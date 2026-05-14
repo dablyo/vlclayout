@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>LED覆盖角动态调整</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+    .control-group {
+      margin-bottom: 15px;
+    }
+    .control-group label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .control-group input[type="range"] {
+      width: 150px;
+      vertical-align: middle;
+    }
+    .control-group input[type="number"] {
+      width: 70px;
+      margin-left: 8px;
+      padding: 3px 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .control-group span {
+      margin-left: 5px;
+      color: #0066cc;
+      font-weight: bold;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+
+<body>
+
+<div id="controls">
+  <div class="control-group">
+    <label>高度 (200-250 cm)</label>
+    <input type="range" id="heightSlider" min="200" max="250" value="200" step="1">
+    <input type="number" id="heightInput" min="200" max="250" value="200" step="1">
+    <span>cm</span>
+  </div>
+  <div class="control-group">
+    <label>覆盖角 (78-110°)</label>
+    <input type="range" id="angleSlider" min="78" max="110" value="90" step="0.1">
+    <input type="number" id="angleInput" min="78" max="110" value="90" step="0.1">
+    <span>°</span>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+// ===== Scene =====
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xffffff);
+
+// ===== Camera =====
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
+camera.position.set(600, 400, 600);
+
+// ===== Renderer =====
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ===== Controls =====
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// ===== 固定参数 =====
+const fixedSide = 330;  // 固定正方形边长 330cm
+const halfSide = fixedSide / 2;
+
+// ===== 动态参数 =====
+let currentHeight = 200;
+let currentAngle = 90;  // 覆盖角（全角）
+
+// ===== 固定正方形顶点 (实线) =====
+// 正方形ABCD，对角线AC
+const A = new THREE.Vector3(-halfSide, 0, -halfSide);
+const B = new THREE.Vector3(halfSide, 0, -halfSide);
+const C = new THREE.Vector3(halfSide, 0, halfSide);
+const D = new THREE.Vector3(-halfSide, 0, halfSide);
+
+// ===== 材质 =====
+const solidLineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
+const dashedLineMaterial = new THREE.LineDashedMaterial({
+  color: 0x0000ff,
+  dashSize: 10,
+  gapSize: 5,
+  linewidth: 2
+});
+const coverLineMaterial = new THREE.LineBasicMaterial({ color: 0x00aa00, linewidth: 2 });
+const centerLineMaterial = new THREE.LineBasicMaterial({ color: 0x888888 });
+const diagonalMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+const blueDiagonalMaterial = new THREE.LineDashedMaterial({
+  color: 0x0088ff,
+  dashSize: 8,
+  gapSize: 4,
+  linewidth: 2
+});
+
+// ===== 固定正方形 (实线) =====
+const fixedSquareGeo = new THREE.BufferGeometry().setFromPoints([A, B, C, D, A]);
+const fixedSquareLine = new THREE.Line(fixedSquareGeo, solidLineMaterial);
+scene.add(fixedSquareLine);
+
+// ===== 对角线AC (红色，覆盖角线在其正上方) =====
+const diagonalGeo = new THREE.BufferGeometry().setFromPoints([A, C]);
+const diagonalLine = new THREE.Line(diagonalGeo, diagonalMaterial);
+scene.add(diagonalLine);
+
+// ===== LED点P =====
+const P = new THREE.Vector3(0, currentHeight, 0);
+const pointP = new THREE.Mesh(
+  new THREE.SphereGeometry(8),
+  new THREE.MeshBasicMaterial({ color: 0x00aa00 })
+);
+pointP.position.copy(P);
+scene.add(pointP);
+
+// ===== 垂直线PO =====
+const O = new THREE.Vector3(0, 0, 0);
+const centerLineGeo = new THREE.BufferGeometry().setFromPoints([P, O]);
+const centerLine = new THREE.Line(centerLineGeo, centerLineMaterial);
+scene.add(centerLine);
+
+// ===== 覆盖角两侧线 (从P到地面交点) =====
+let leftLine, rightLine;
+let dashedSquareLine, blueDiagonalLine;
+let dashedCircleLine;
+let labels = [];
+
+// ===== 计算并更新几何 =====
+function updateGeometry() {
+  // 更新P点位置
+  P.set(0, currentHeight, 0);
+  pointP.position.copy(P);
+
+  // 更新垂直线
+  centerLine.geometry.setFromPoints([P, O]);
+
+  // 计算覆盖角半角
+  const halfAngleRad = (currentAngle / 2) * Math.PI / 180;
+
+  // 计算地面交点距离中心的距离
+  // tan(半角) = 距离 / 高度
+  const groundDistance = currentHeight * Math.tan(halfAngleRad);
+
+  // 对角线AC方向：从中心到C的方向向量 (1, 0, 1) 归一化
+  const diagDir = new THREE.Vector3(1, 0, 1).normalize();
+
+  // 覆盖角两侧线在地面上的交点
+  // 这两个点位于对角线AC的垂直方向上
+  // 对角线AC的方向是 (1, 0, 1)，垂直方向是 (-1, 0, 1) 或 (1, 0, -1)
+  const perpDir = new THREE.Vector3(-1, 0, 1).normalize();
+
+  const groundLeft = new THREE.Vector3().copy(O).addScaledVector(perpDir, -groundDistance);
+  const groundRight = new THREE.Vector3().copy(O).addScaledVector(perpDir, groundDistance);
+
+  // 更新或创建覆盖角两侧线
+  if (leftLine) scene.remove(leftLine);
+  if (rightLine) scene.remove(rightLine);
+
+  const leftLineGeo = new THREE.BufferGeometry().setFromPoints([P, groundLeft]);
+  leftLine = new THREE.Line(leftLineGeo, coverLineMaterial);
+  scene.add(leftLine);
+
+  const rightLineGeo = new THREE.BufferGeometry().setFromPoints([P, groundRight]);
+  rightLine = new THREE.Line(rightLineGeo, coverLineMaterial);
+  scene.add(rightLine);
+
+  // 计算虚线正方形
+  // 虚线正方形的对角线就是 groundLeft 到 groundRight 的连线
+  // 对角线长度 = 2 * groundDistance
+  const virtualDiagLength = 2 * groundDistance;
+  // 正方形边长 = 对角线 / sqrt(2)
+  const virtualSide = virtualDiagLength / Math.sqrt(2);
+  const halfVirtualSide = virtualSide / 2;
+
+  // 虚线正方形的顶点：对角线方向是perpDir，另一对角线方向是diagDir
+  // 中心在原点，对角线沿perpDir方向
+  const vA = new THREE.Vector3().copy(O).addScaledVector(perpDir, -groundDistance);
+  const vC = new THREE.Vector3().copy(O).addScaledVector(perpDir, groundDistance);
+  const vB = new THREE.Vector3().copy(O).addScaledVector(diagDir, groundDistance);
+  const vD = new THREE.Vector3().copy(O).addScaledVector(diagDir, -groundDistance);
+
+  // 实际上应该是：如果对角线是vA到vC，那么另一对角线应该与之垂直且等长
+  // vA = (-d, 0, d), vC = (d, 0, -d) 其中 d = groundDistance/sqrt(2)
+  // 等等，让我重新计算
+
+  // groundLeft = (d, 0, -d) * groundDistance / sqrt(2) ?
+  // perpDir = (-1, 0, 1)/sqrt(2), so groundLeft = -groundDistance * (-1, 0, 1)/sqrt(2) = (groundDistance/sqrt(2), 0, -groundDistance/sqrt(2))
+  // groundRight = (-groundDistance/sqrt(2), 0, groundDistance/sqrt(2))
+
+  // 重新正确计算
+  const d = groundDistance / Math.sqrt(2);
+  const vA_correct = new THREE.Vector3(d, 0, -d);
+  const vC_correct = new THREE.Vector3(-d, 0, d);
+
+  // 另一对角线沿diagDir = (1,0,1)/sqrt(2)
+  const vB_correct = new THREE.Vector3(d, 0, d);
+  const vD_correct = new THREE.Vector3(-d, 0, -d);
+
+  if (dashedSquareLine) scene.remove(dashedSquareLine);
+  if (blueDiagonalLine) scene.remove(blueDiagonalLine);
+  if (dashedCircleLine) scene.remove(dashedCircleLine);
+
+  const dashedSquareGeo = new THREE.BufferGeometry().setFromPoints([
+    vA_correct, vB_correct, vC_correct, vD_correct, vA_correct
+  ]);
+  dashedSquareLine = new THREE.Line(dashedSquareGeo, dashedLineMaterial);
+  dashedSquareLine.computeLineDistances();  // 必须调用以显示虚线
+  scene.add(dashedSquareLine);
+
+  // 虚线正方形的蓝色对角线（与红线垂直，即vA到vC）
+  const blueDiagonalGeo = new THREE.BufferGeometry().setFromPoints([vA_correct, vC_correct]);
+  blueDiagonalLine = new THREE.Line(blueDiagonalGeo, blueDiagonalMaterial);
+  blueDiagonalLine.computeLineDistances();
+  scene.add(blueDiagonalLine);
+
+  // 虚线圆：以对角线为直径（半径=groundDistance）
+  const circleGeo = new THREE.RingGeometry(groundDistance - 0.5, groundDistance + 0.5, 128);
+  circleGeo.rotateX(-Math.PI / 2);
+  const dashedCircleMaterial = new THREE.LineDashedMaterial({
+    color: 0x0088ff,
+    dashSize: 8,
+    gapSize: 4,
+    linewidth: 2
+  });
+  // 使用 CircleGeometry 创建圆环点集
+  const circlePoints = [];
+  const segments = 128;
+  for (let i = 0; i <= segments; i++) {
+    const theta = (i / segments) * Math.PI * 2;
+    const x = groundDistance * Math.cos(theta);
+    const z = groundDistance * Math.sin(theta);
+    circlePoints.push(new THREE.Vector3(x, 0, z));
+  }
+  const dashedCircleGeo = new THREE.BufferGeometry().setFromPoints(circlePoints);
+  dashedCircleLine = new THREE.Line(dashedCircleGeo, dashedCircleMaterial);
+  dashedCircleLine.computeLineDistances();
+  scene.add(dashedCircleLine);
+
+  // 更新标注
+  updateLabels(virtualSide, groundDistance);
+}
+
+// ===== 标注 =====
+function createLabel(text, pos) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = "black";
+  ctx.font = "bold 32px 'Microsoft YaHei', sans-serif";
+  ctx.fillText(text, 20, 120);
+
+  const tex = new THREE.CanvasTexture(canvas);
+
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex })
+  );
+
+  sprite.scale.set(150, 75, 1);
+  sprite.position.copy(pos);
+
+  scene.add(sprite);
+  return sprite;
+}
+
+function updateLabels(virtualSide, groundDistance) {
+  // 清除旧标注
+  labels.forEach(label => scene.remove(label));
+  labels = [];
+
+  // 高度标注
+  labels.push(createLabel(`高度: ${currentHeight} cm`, new THREE.Vector3(30, currentHeight/2, 0)));
+
+  // 覆盖角标注
+  labels.push(createLabel(`覆盖角: ${currentAngle.toFixed(1)}°`, new THREE.Vector3(0, currentHeight + 40, 0)));
+
+  // 虚线正方形边长标注
+  const virtualSideCm = virtualSide.toFixed(1);
+  labels.push(createLabel(`虚线边长: ${virtualSideCm} cm`, new THREE.Vector3(0, 20, 0)));
+
+  // 固定正方形边长标注
+  labels.push(createLabel(`固定边长: ${fixedSide} cm`, new THREE.Vector3(halfSide + 20, 0, halfSide + 20)));
+
+  // 固定正方形红色对角线长度标注 (AC对角线)
+  const fixedDiagonal = fixedSide * Math.sqrt(2);
+  labels.push(createLabel(`固定对角线: ${fixedDiagonal.toFixed(1)} cm`, new THREE.Vector3(halfSide, 5, halfSide)));
+
+  // 虚线正方形对角线长度标注
+  const virtualDiagonal2 = (2 * groundDistance).toFixed(1);  // 与红线垂直的蓝色对角线 (vB到vD)
+  labels.push(createLabel(`虚线对角线: ${virtualDiagonal2} cm`, new THREE.Vector3(20, 5, -20)));
+}
+
+// ===== 滑块和输入框事件 =====
+const heightSlider = document.getElementById('heightSlider');
+const angleSlider = document.getElementById('angleSlider');
+const heightInput = document.getElementById('heightInput');
+const angleInput = document.getElementById('angleInput');
+
+// 高度滑块变化
+heightSlider.addEventListener('input', (e) => {
+  currentHeight = parseInt(e.target.value);
+  heightInput.value = currentHeight;
+  updateGeometry();
+});
+
+// 高度输入框变化
+heightInput.addEventListener('input', (e) => {
+  let value = parseInt(e.target.value);
+  if (isNaN(value)) return;
+  // 限制范围
+  if (value < 200) value = 200;
+  if (value > 250) value = 250;
+  currentHeight = value;
+  heightSlider.value = value;
+  updateGeometry();
+});
+
+// 覆盖角滑块变化
+angleSlider.addEventListener('input', (e) => {
+  currentAngle = parseFloat(e.target.value);
+  angleInput.value = currentAngle.toFixed(1);
+  updateGeometry();
+});
+
+// 覆盖角输入框变化
+angleInput.addEventListener('input', (e) => {
+  let value = parseFloat(e.target.value);
+  if (isNaN(value)) return;
+  // 限制范围
+  if (value < 78) value = 78;
+  if (value > 110) value = 110;
+  currentAngle = value;
+  angleSlider.value = value;
+  updateGeometry();
+});
+
+// ===== Light =====
+scene.add(new THREE.DirectionalLight(0xffffff, 1).position.set(500, 500, 500));
+
+// ===== 初始化 =====
+updateGeometry();
+
+// ===== Render loop =====
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ===== Resize =====
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>

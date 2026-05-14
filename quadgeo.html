@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>九区域LED覆盖角动态调整</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 100;
+    }
+    .control-group {
+      margin-bottom: 15px;
+    }
+    .control-group label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .control-group input[type="range"] {
+      width: 150px;
+      vertical-align: middle;
+    }
+    .control-group input[type="number"] {
+      width: 70px;
+      margin-left: 8px;
+      padding: 3px 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .control-group span {
+      margin-left: 5px;
+      color: #0066cc;
+      font-weight: bold;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+
+<body>
+
+<div id="controls">
+  <div class="control-group">
+    <label>高度 (200-250 cm)</label>
+    <input type="range" id="heightSlider" min="200" max="250" value="200" step="1">
+    <input type="number" id="heightInput" min="200" max="250" value="200" step="1">
+    <span>cm</span>
+  </div>
+  <div class="control-group">
+    <label>覆盖角 (78-110°)</label>
+    <input type="range" id="angleSlider" min="78" max="110" value="90" step="0.1">
+    <input type="number" id="angleInput" min="78" max="110" value="90" step="0.1">
+    <span>°</span>
+  </div>
+  <div class="info-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ccc;">
+    <div style="font-size: 14px; color: #333; line-height: 1.8;">
+      <div><strong>实线区域参数：</strong></div>
+      <div>边长: 333 cm</div>
+      <div>对角线: 470.9 cm</div>
+      <div>面积: 11.11 m² 共99.99 m²</div>
+    </div>
+  </div>
+  <div class="hint-group" style="margin-top: 10px; font-size: 12px; color: #666;">
+    <div>方向键 ↑↓←→ 移动视角</div>
+    <div>鼠标滚动缩放视角</div>
+    <div>鼠标拖动旋转视角</div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+// ===== Scene =====
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xffffff);
+
+// ===== Camera =====
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
+camera.position.set(1200, 900, 1200);
+
+// ===== Renderer =====
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ===== Controls =====
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.enableDamping = true;
+orbitControls.target.set(0, 0, 0);
+
+// ===== 固定参数 =====
+const fixedSide = 333;
+const halfSide = fixedSide / 2;
+
+// ===== 动态参数 =====
+let currentHeight = 200;
+let currentAngle = 90;
+
+// ===== 材质 =====
+const solidLineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+const coverLineMat = new THREE.LineBasicMaterial({ color: 0x00aa00 });
+const centerLineMat = new THREE.LineBasicMaterial({ color: 0x888888 });
+const diagonalMat = new THREE.LineBasicMaterial({ color: 0xff0000 });
+
+// ===== 9种颜色（包含蓝色，不包含红、绿、黑）=====
+const regionColors = [
+  0x0088ff, // 1-蓝色
+  0x8b5cf6, // 2-紫色
+  0x06b6d4, // 3-青色
+  0xf97316, // 4-橙色
+  0xec4899, // 5-粉色
+  0xeab308, // 6-黄色
+  0x6366f1, // 7-靛蓝
+  0xd946ef, // 8-玫红
+  0xa0522d  // 9-棕色
+];
+
+// ===== 九个区域的中心点（3x3布局）=====
+const regionCenters = [];
+for (let row = 0; row < 3; row++) {
+  for (let col = 0; col < 3; col++) {
+    regionCenters.push(new THREE.Vector3(
+      (col - 1) * fixedSide,
+      0,
+      (row - 1) * fixedSide
+    ));
+  }
+}
+// 结果: [左上, 中上, 右上, 左中, 中心, 右中, 左下, 中下, 右下]
+
+// ===== 所有动态对象的容器 =====
+const dynamicObjects = [];
+let labels = [];
+
+// ===== 创建数字标注 =====
+function createNumberLabel(num, pos, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.font = "bold 80px 'Microsoft YaHei', sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(num.toString(), 128, 128);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  sprite.scale.set(100, 100, 1);
+  sprite.position.copy(pos);
+  scene.add(sprite);
+  return sprite;
+}
+
+// ===== 创建文本标注 =====
+function createLabel(text, pos) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = "black";
+  ctx.font = "bold 32px 'Microsoft YaHei', sans-serif";
+  ctx.fillText(text, 20, 120);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  sprite.scale.set(150, 75, 1);
+  sprite.position.copy(pos);
+  scene.add(sprite);
+  return sprite;
+}
+
+// ===== 初始化静态对象（固定正方形、红色对角线）=====
+regionCenters.forEach((center) => {
+  const A = new THREE.Vector3(center.x - halfSide, 0, center.z - halfSide);
+  const B = new THREE.Vector3(center.x + halfSide, 0, center.z - halfSide);
+  const C = new THREE.Vector3(center.x + halfSide, 0, center.z + halfSide);
+  const D = new THREE.Vector3(center.x - halfSide, 0, center.z + halfSide);
+
+  // 黑色正方形
+  const sqGeo = new THREE.BufferGeometry().setFromPoints([A, B, C, D, A]);
+  scene.add(new THREE.Line(sqGeo, solidLineMat));
+
+  // 红色对角线
+  const diagGeo = new THREE.BufferGeometry().setFromPoints([A, C]);
+  scene.add(new THREE.Line(diagGeo, diagonalMat));
+});
+
+// ===== 清除所有动态对象 =====
+function clearDynamic() {
+  dynamicObjects.forEach(obj => scene.remove(obj));
+  dynamicObjects.length = 0;
+  labels.forEach(lbl => scene.remove(lbl));
+  labels.length = 0;
+}
+
+// ===== 重建所有动态对象 =====
+function rebuildAll() {
+  clearDynamic();
+
+  const halfAngleRad = (currentAngle / 2) * Math.PI / 180;
+  const groundDistance = currentHeight * Math.tan(halfAngleRad);
+  const virtualSide = (2 * groundDistance) / Math.sqrt(2);
+  const d = groundDistance / Math.sqrt(2);
+
+  regionCenters.forEach((center, idx) => {
+    const P = new THREE.Vector3(center.x, currentHeight, center.z);
+    const O = new THREE.Vector3(center.x, 0, center.z);
+    const color = regionColors[idx];
+
+    // LED点
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(6),
+      new THREE.MeshBasicMaterial({ color: 0x00aa00 })
+    );
+    sphere.position.copy(P);
+    scene.add(sphere);
+    dynamicObjects.push(sphere);
+
+    // 垂直线PO
+    const clGeo = new THREE.BufferGeometry().setFromPoints([P, O]);
+    const cl = new THREE.Line(clGeo, centerLineMat);
+    scene.add(cl);
+    dynamicObjects.push(cl);
+
+    // 覆盖角两侧线
+    const perpDir = new THREE.Vector3(-1, 0, 1).normalize();
+    const gLeft = new THREE.Vector3().copy(O).addScaledVector(perpDir, -groundDistance);
+    const gRight = new THREE.Vector3().copy(O).addScaledVector(perpDir, groundDistance);
+
+    const llGeo = new THREE.BufferGeometry().setFromPoints([P, gLeft]);
+    const ll = new THREE.Line(llGeo, coverLineMat);
+    scene.add(ll);
+    dynamicObjects.push(ll);
+
+    const rlGeo = new THREE.BufferGeometry().setFromPoints([P, gRight]);
+    const rl = new THREE.Line(rlGeo, coverLineMat);
+    scene.add(rl);
+    dynamicObjects.push(rl);
+
+    // 虚线正方形（彩色）
+    const vA = new THREE.Vector3(center.x + d, 0, center.z - d);
+    const vB = new THREE.Vector3(center.x + d, 0, center.z + d);
+    const vC = new THREE.Vector3(center.x - d, 0, center.z + d);
+    const vD = new THREE.Vector3(center.x - d, 0, center.z - d);
+
+    const sqMat = new THREE.LineDashedMaterial({ color: color, dashSize: 10, gapSize: 5 });
+    const sqGeo = new THREE.BufferGeometry().setFromPoints([vA, vB, vC, vD, vA]);
+    const sq = new THREE.Line(sqGeo, sqMat);
+    sq.computeLineDistances();
+    scene.add(sq);
+    dynamicObjects.push(sq);
+
+    // 虚线对角线（彩色）
+    const diagMat = new THREE.LineDashedMaterial({ color: color, dashSize: 8, gapSize: 4 });
+    const diagGeo = new THREE.BufferGeometry().setFromPoints([vA, vC]);
+    const diag = new THREE.Line(diagGeo, diagMat);
+    diag.computeLineDistances();
+    scene.add(diag);
+    dynamicObjects.push(diag);
+
+    // 虚线圆（彩色）
+    const circlePts = [];
+    for (let i = 0; i <= 128; i++) {
+      const theta = (i / 128) * Math.PI * 2;
+      circlePts.push(new THREE.Vector3(
+        center.x + groundDistance * Math.cos(theta),
+        0,
+        center.z + groundDistance * Math.sin(theta)
+      ));
+    }
+    const circMat = new THREE.LineDashedMaterial({ color: color, dashSize: 8, gapSize: 4 });
+    const circGeo = new THREE.BufferGeometry().setFromPoints(circlePts);
+    const circ = new THREE.Line(circGeo, circMat);
+    circ.computeLineDistances();
+    scene.add(circ);
+    dynamicObjects.push(circ);
+
+    // 数字标注（1-9）
+    const numLabel = createNumberLabel(idx + 1, new THREE.Vector3(center.x, 5, center.z), color);
+    dynamicObjects.push(numLabel);
+  });
+
+  // 区域1（左上, index=0）的参数标注
+  const c0 = regionCenters[0];
+  labels.push(createLabel(`高度: ${currentHeight} cm`,
+    new THREE.Vector3(c0.x + 30, currentHeight / 2, c0.z)));
+  labels.push(createLabel(`覆盖角: ${currentAngle.toFixed(1)}°`,
+    new THREE.Vector3(c0.x + 40, currentHeight + 20, c0.z + 40)));
+  labels.push(createLabel(`虚线边长: ${virtualSide.toFixed(1)} cm`,
+    new THREE.Vector3(c0.x, 20, c0.z)));
+  labels.push(createLabel(`虚线对角线: ${(2 * groundDistance).toFixed(1)} cm`,
+    new THREE.Vector3(c0.x + 20, 5, c0.z - 20)));
+}
+
+// ===== 滑块和输入框事件 =====
+const heightSlider = document.getElementById('heightSlider');
+const angleSlider = document.getElementById('angleSlider');
+const heightInput = document.getElementById('heightInput');
+const angleInput = document.getElementById('angleInput');
+
+heightSlider.addEventListener('input', (e) => {
+  currentHeight = parseInt(e.target.value);
+  heightInput.value = currentHeight;
+  rebuildAll();
+});
+
+heightInput.addEventListener('input', (e) => {
+  let v = parseInt(e.target.value);
+  if (isNaN(v)) return;
+  if (v < 200) v = 200;
+  if (v > 250) v = 250;
+  currentHeight = v;
+  heightSlider.value = v;
+  rebuildAll();
+});
+
+angleSlider.addEventListener('input', (e) => {
+  currentAngle = parseFloat(e.target.value);
+  angleInput.value = currentAngle.toFixed(1);
+  rebuildAll();
+});
+
+angleInput.addEventListener('input', (e) => {
+  let v = parseFloat(e.target.value);
+  if (isNaN(v)) return;
+  if (v < 78) v = 78;
+  if (v > 110) v = 110;
+  currentAngle = v;
+  angleSlider.value = v;
+  rebuildAll();
+});
+
+// ===== 方向键控制 =====
+const moveSpeed = 20;
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+    keys[e.code] = true;
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+    keys[e.code] = false;
+    e.preventDefault();
+  }
+});
+
+function updateCameraPosition() {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  forward.y = 0;
+  forward.normalize();
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  right.y = 0;
+  right.normalize();
+  const moveDir = new THREE.Vector3();
+  if (keys.ArrowUp) moveDir.add(forward);
+  if (keys.ArrowDown) moveDir.sub(forward);
+  if (keys.ArrowLeft) moveDir.sub(right);
+  if (keys.ArrowRight) moveDir.add(right);
+  if (moveDir.lengthSq() > 0) {
+    moveDir.normalize().multiplyScalar(moveSpeed);
+    camera.position.add(moveDir);
+    orbitControls.target.add(moveDir);
+  }
+}
+
+// ===== Light =====
+scene.add(new THREE.AmbientLight(0xffffff, 1));
+scene.add(new THREE.DirectionalLight(0xffffff, 1).position.set(500, 500, 500));
+
+// ===== 初始化 =====
+rebuildAll();
+
+// ===== Render loop =====
+function animate() {
+  requestAnimationFrame(animate);
+  updateCameraPosition();
+  orbitControls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ===== Resize =====
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
