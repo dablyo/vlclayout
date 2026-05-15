@@ -39,6 +39,10 @@ export default function Module({ id, x, z, height, angle, color, isSelected, sho
   const spherePos = [x, height, z];
   const groundPos = [x, 0, z];
 
+  // Derived display values
+  const coverageDiameter = (groundDistance * 2).toFixed(0);
+  const squareSide = (d * 2).toFixed(0);
+
   return (
     <group>
       {/* Green sphere - AP point */}
@@ -97,6 +101,50 @@ export default function Module({ id, x, z, height, angle, color, isSelected, sho
         anchorY="middle"
       >
         {id}
+      </Text>
+
+      {/* Height label - on height line */}
+      <Text
+        position={[x + 15, height / 2, z]}
+        fontSize={16}
+        color="#888888"
+        anchorX="left"
+        anchorY="middle"
+      >
+        {`H:${height}`}
+      </Text>
+
+      {/* Angle label - near coverage angle lines */}
+      <Text
+        position={[x, height - 15, z + 15]}
+        fontSize={16}
+        color="#00aa00"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`${angle}°`}
+      </Text>
+
+      {/* Diameter label - on coverage circle edge */}
+      <Text
+        position={[x + groundDistance, 1, z]}
+        fontSize={16}
+        color={color}
+        anchorX="left"
+        anchorY="middle"
+      >
+        {`⌀${coverageDiameter}`}
+      </Text>
+
+      {/* Square side label - on square edge */}
+      <Text
+        position={[x, 1, z + d]}
+        fontSize={16}
+        color={color}
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`□${squareSide}`}
       </Text>
 
       {/* Selection ring */}
