@@ -3,7 +3,7 @@
   "outputDirectory": "client/dist",
   "functions": {
     "api/**/*.js": {
-      "runtime": "@vercel/node@3"
+      "runtime": "vlc@1.0.0"
     }
   },
   "rewrites": [
